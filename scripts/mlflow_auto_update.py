@@ -1,66 +1,46 @@
 import mlflow
 import bentoml
-import pickle
-import json
 import os
-from datetime import datetime
-from sklearn.datasets import load_iris
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+import json
+import time
+import subprocess
 
-# Define paths
-MODEL_DIR = "models/latest"
-METADATA_FILE = os.path.join(MODEL_DIR, "metadata.json")
-MODEL_FILE = os.path.join(MODEL_DIR, "model.pkl")
+mlflow.set_tracking_uri("http://localhost:5000")
 
-# Ensure model directory exists
-os.makedirs(MODEL_DIR, exist_ok=True)
+def get_latest_production_model():
+    client = mlflow.tracking.MlflowClient()
 
-def train_and_register_model():
-    mlflow.set_tracking_uri("sqlite:///mlflow.db")  # Ensure MLflow logs locally
-    mlflow.set_experiment("iris_classification")
+    try:
+        latest_version = client.get_latest_versions("iris_classifier", stages=["Production"])[0]
+        print(f"📥 Latest Production Model: Version {latest_version.version}")
+        return latest_version.version
+    except Exception as e:
+        print("❌ No production model found in MLflow.")
+        return None
 
-    # Load dataset
-    iris = load_iris()
-    X, y = iris.data, iris.target
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+def update_bento_model():
+    latest_version = get_latest_production_model()
+    if not latest_version:
+        return
 
-    # Train model
-    model = RandomForestClassifier(n_estimators=100)
-    model.fit(X_train, y_train)
-    predictions = model.predict(X_test)
-    acc = accuracy_score(y_test, predictions)
-    print(f"✅ Model trained with accuracy: {acc:.2f}")
+    model_uri = f"models:/iris_classifier/{latest_version}"
+    model = mlflow.pyfunc.load_model(model_uri)
 
-    with mlflow.start_run() as run:
-        model_info = mlflow.sklearn.log_model(
-            sk_model=model,
-            artifact_path="iris_model",
-            registered_model_name="iris_classifier"
-        )
-        mlflow.log_metric("accuracy", acc)
+    # Save model to BentoML
+    bento_model = bentoml.sklearn.save_model("flower_model", model)
+    print(f"✅ Updated BentoML Model: {bento_model.tag}")
 
-        # Move the model to "Production"
-        client = mlflow.tracking.MlflowClient()
-        client.transition_model_version_stage(
-            name="iris_classifier",
-            version=model_info.version,
-            stage="Production"
-        )
+    # Restart BentoML API
+    print("🔄 Restarting BentoML API...")
+    subprocess.run(["pkill", "-f", "bentoml serve"], stderr=subprocess.DEVNULL)
+    subprocess.run(["bentoml", "serve", "service.py:svc", "&"])
 
-    # Save model locally
-    with open(MODEL_FILE, "wb") as f:
-        pickle.dump(model, f)
-
-    # Save metadata
-    metadata = {
-        "version": str(model_info.version),
-        "accuracy": acc,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    with open(METADATA_FILE, "w") as f:
-        json.dump(metadata, f)
+def continuous_check():
+    print("🔄 Starting MLflow model update service...")
+    while True:
+        update_bento_model()
+        print("⏳ Waiting 5 minutes before checking again...")
+        time.sleep(300)
 
 if __name__ == "__main__":
-    train_and_register_model()
+    continuous_check()
