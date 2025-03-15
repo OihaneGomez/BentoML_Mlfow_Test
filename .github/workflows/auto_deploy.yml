@@ -1,0 +1,34 @@
+name: Auto Deploy MLflow Model
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy-model:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          pip install mlflow bentoml scikit-learn pandas requests
+
+      - name: Train & Save Model
+        run: |
+          python scripts/train_model.py
+
+      - name: Upload Model to GitHub
+        uses: actions/upload-artifact@v3
+        with:
+          name: bentoml-model
+          path: models/latest
