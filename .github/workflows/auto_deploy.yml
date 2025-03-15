@@ -1,13 +1,13 @@
-name: Auto Deploy MLflow Model
+name: Auto Train & Deploy MLflow Model
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch:
+  workflow_dispatch:  # Allows manual triggering
 
 jobs:
-  deploy-model:
+  train-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
@@ -23,12 +23,21 @@ jobs:
         run: |
           pip install mlflow bentoml scikit-learn pandas requests
 
-      - name: Train & Save Model
+      - name: Train & Log Model in MLflow
         run: |
           python scripts/train_model.py
 
       - name: Upload Model to GitHub
         uses: actions/upload-artifact@v3
         with:
-          name: bentoml-model
-          path: models/latest
+          name: mlflow-model
+          path: mlflow_artifacts/
+
+      - name: Commit & Push Updated Model
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git add models/latest/
+          git commit -m "🤖 Auto-updated MLflow model"
+          git push origin main
+        continue-on-error: true
